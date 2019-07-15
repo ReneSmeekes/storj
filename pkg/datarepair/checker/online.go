@@ -5,6 +5,7 @@ package checker
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"storj.io/storj/pkg/overlay"
@@ -14,11 +15,10 @@ import (
 
 // ReliabilityCache caches the reliable nodes for the specified staleness duration
 // and updates automatically from overlay.
-//
-// ReliabilityCache is NOT safe for concurrent use.
 type ReliabilityCache struct {
 	overlay    *overlay.Cache
 	staleness  time.Duration
+	mu         sync.RWMutex
 	lastUpdate time.Time
 	reliable   map[storj.NodeID]struct{}
 }
@@ -33,7 +33,12 @@ func NewReliabilityCache(overlay *overlay.Cache, staleness time.Duration) *Relia
 }
 
 // LastUpdate returns when the cache was last updated.
-func (cache *ReliabilityCache) LastUpdate() time.Time { return cache.lastUpdate }
+func (cache *ReliabilityCache) LastUpdate() time.Time {
+	cache.mu.RLock()
+	defer cache.mu.RUnlock()
+
+	return cache.lastUpdate
+}
 
 // MissingPieces returns piece indices that are unreliable with the given staleness period.
 func (cache *ReliabilityCache) MissingPieces(ctx context.Context, created time.Time, pieces []*pb.RemotePiece) ([]int32, error) {
@@ -43,6 +48,9 @@ func (cache *ReliabilityCache) MissingPieces(ctx context.Context, created time.T
 			return nil, err
 		}
 	}
+
+	cache.mu.RLock()
+	defer cache.mu.RUnlock()
 
 	var unreliable []int32
 	for _, piece := range pieces {
@@ -55,6 +63,9 @@ func (cache *ReliabilityCache) MissingPieces(ctx context.Context, created time.T
 
 // Refresh refreshes the cache.
 func (cache *ReliabilityCache) Refresh(ctx context.Context) error {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
 	for id := range cache.reliable {
 		delete(cache.reliable, id)
 	}
